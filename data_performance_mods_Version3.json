@@ -1,0 +1,26 @@
+{
+  "fabric": [
+    { "name": "Sodium", "modid_hint": "sodium", "name_hint": "sodium", "loader": "fabric", "note": "Крупный прирост FPS, замена рендера" },
+    { "name": "Iris", "modid_hint": "iris", "name_hint": "iris", "loader": "fabric", "note": "Шейдеры для Sodium (аналог OptiFine шейдеров)" },
+    { "name": "Lithium", "modid_hint": "lithium", "name_hint": "lithium", "loader": "fabric", "note": "Оптимизации логики игры" },
+    { "name": "Starlight", "modid_hint": "starlight", "name_hint": "starlight", "loader": "fabric", "note": "Оптимизация освещения (не вместе с Phosphor)" },
+    { "name": "FerriteCore", "modid_hint": "ferritecore", "name_hint": "ferrite", "loader": "fabric", "note": "Оптимизация памяти" },
+    { "name": "LazyDFU", "modid_hint": "lazydfu", "name_hint": "lazydfu", "loader": "fabric", "note": "Быстрый старт клиента (ленивая инициализация DFU)" },
+    { "name": "MemoryLeakFix", "modid_hint": "memoryleakfix", "name_hint": "memory leak fix", "loader": "fabric", "note": "Фиксы утечек памяти" }
+  ],
+  "forge": [
+    { "name": "Embeddium (или Rubidium)", "modid_hint": "embeddium", "name_hint": "embeddium", "loader": "forge", "note": "Порт Sodium для Forge (выберите один — Embeddium или Rubidium)" },
+    { "name": "Oculus", "modid_hint": "oculus", "name_hint": "oculus", "loader": "forge", "note": "Шейдеры для Embeddium/Rubidium" },
+    { "name": "FerriteCore", "modid_hint": "ferritecore", "name_hint": "ferrite", "loader": "forge", "note": "Оптимизация памяти" },
+    { "name": "Starlight", "modid_hint": "starlight", "name_hint": "starlight", "loader": "forge", "note": "Оптимизация освещения (не вместе с Phosphor)" },
+    { "name": "ModernFix", "modid_hint": "modernfix", "name_hint": "modernfix", "loader": "forge", "note": "Фиксы производительности и памяти" },
+    { "name": "MemoryLeakFix", "modid_hint": "memoryleakfix", "name_hint": "memory leak fix", "loader": "forge", "note": "Фиксы утечек памяти" }
+  ],
+  "quilt": [
+    { "name": "Sodium", "modid_hint": "sodium", "name_hint": "sodium", "loader": "quilt", "note": "Работает под Quilt (совместимость Fabric)" },
+    { "name": "Iris", "modid_hint": "iris", "name_hint": "iris", "loader": "quilt", "note": "Шейдеры под Sodium" },
+    { "name": "Lithium", "modid_hint": "lithium", "name_hint": "lithium", "loader": "quilt", "note": "Оптимизации логики игры" },
+    { "name": "Starlight", "modid_hint": "starlight", "name_hint": "starlight", "loader": "quilt", "note": "Оптимизация освещения" },
+    { "name": "FerriteCore", "modid_hint": "ferritecore", "name_hint": "ferrite", "loader": "quilt", "note": "Оптимизация памяти" }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "pairs": [
+    {
+      "a": "sodium",
+      "b": "optifine",
+      "reason": "Sodium и OptiFine несовместимы (рендер-конфликты)",
+      "when": { "loader": ["fabric", "quilt"] }
+    },
+    {
+      "a": "rubidium",
+      "b": "optifine",
+      "reason": "Rubidium (Forge-порт Sodium) конфликтует с OptiFine",
+      "when": { "loader": ["forge"] }
+    },
+    {
+      "a": "embeddium",
+      "b": "optifine",
+      "reason": "Embeddium (Forge) конфликтует с OptiFine",
+      "when": { "loader": ["forge"] }
+    },
+    {
+      "a": "rubidium",
+      "b": "embeddium",
+      "reason": "Дублирующая функциональность оптимизации рендера (выберите один)",
+      "when": { "loader": ["forge"] }
+    },
+    {
+      "a": "starlight",
+      "b": "phosphor",
+      "reason": "Оба заменяют систему освещения — держите только один",
+      "when": { "loader": ["fabric", "quilt", "forge"] }
+    },
+    {
+      "a": "iris",
+      "b": "optifine",
+      "reason": "Iris/Sodium vs OptiFine — несовместимы",
+      "when": { "loader": ["fabric", "quilt"] }
+    },
+    {
+      "a": "oculus",
+      "b": "optifine",
+      "reason": "Oculus (Forge шейдеры) несовместим с OptiFine",
+      "when": { "loader": ["forge"] }
+    },
+    {
+      "a": "optifabric",
+      "b": "sodium",
+      "reason": "OptiFabric (мост для OptiFine) конфликтует с Sodium",
+      "when": { "loader": ["fabric", "quilt"] }
+    },
+    {
+      "a": "optifabric",
+      "b": "iris",
+      "reason": "OptiFabric конфликтует с Iris",
+      "when": { "loader": ["fabric", "quilt"] }
+    }
+  ]
+}
