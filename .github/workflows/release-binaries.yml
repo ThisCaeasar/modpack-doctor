@@ -43,6 +43,11 @@ jobs:
         
     - name: Build GUI executable
       run: |
+        # Create modpack_doctor.py symlink if it doesn't exist (for compatibility)
+        if [ ! -f "modpack_doctor.py" ]; then
+          ln -sf modpack_doctor_Version3.py modpack_doctor.py
+        fi
+        
         pyinstaller --noconsole --onefile modpack_doctor_gui.py \
           --name ModpackDoctor-GUI${{ matrix.binary-extension }} \
           --add-data "modpack_doctor_Version3.py${{ matrix.separator }}." \
