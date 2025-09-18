@@ -1,0 +1,66 @@
+name: Build Release Binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            python-executable: python
+            binary-extension: .exe
+            separator: ";"
+          - os: macos-latest
+            python-executable: python3
+            binary-extension: ""
+            separator: ":"
+          - os: ubuntu-latest
+            python-executable: python3
+            binary-extension: ""
+            separator: ":"
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        ${{ matrix.python-executable }} -m pip install --upgrade pip
+        ${{ matrix.python-executable }} -m pip install -r requirements_Version3.txt
+        ${{ matrix.python-executable }} -m pip install pyinstaller
+        
+    - name: Build GUI executable
+      run: |
+        pyinstaller --noconsole --onefile modpack_doctor_gui.py \
+          --name ModpackDoctor-GUI${{ matrix.binary-extension }} \
+          --add-data "modpack_doctor_Version3.py${{ matrix.separator }}." \
+          --add-data "modpack_doctor.py${{ matrix.separator }}." \
+          --add-data "data_known_conflicts_Version3.json${{ matrix.separator }}." \
+          --add-data "data_performance_mods_Version3.json${{ matrix.separator }}."
+      shell: bash
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ModpackDoctor-GUI-${{ runner.os }}
+        path: dist/ModpackDoctor-GUI${{ matrix.binary-extension }}
+        
+    - name: Upload to release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/ModpackDoctor-GUI${{ matrix.binary-extension }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
