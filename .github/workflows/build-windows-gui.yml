@@ -1,0 +1,88 @@
+name: Build Windows GUI
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      upload_artifact:
+        description: 'Upload built executable as artifact'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Build executable
+      run: |
+        pyinstaller --onefile --windowed --name "ModpackDoctor-GUI" `
+          --add-data "data_known_conflicts_Version3.json;." `
+          --add-data "data_performance_mods_Version3.json;." `
+          --hidden-import=PIL `
+          --hidden-import=PIL._tkinter_finder `
+          --hidden-import=tomli `
+          --hidden-import=tomllib `
+          modpack_doctor_gui_new.py
+    
+    - name: Verify build
+      run: |
+        if (Test-Path "dist\ModpackDoctor-GUI.exe") {
+          Write-Host "Build successful!"
+          Get-ChildItem dist\ModpackDoctor-GUI.exe | Format-List Name, Length, LastWriteTime
+        } else {
+          Write-Host "Build failed - executable not found!"
+          exit 1
+        }
+    
+    - name: Upload artifact
+      if: ${{ github.event.inputs.upload_artifact == 'true' }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ModpackDoctor-GUI-Windows
+        path: dist/ModpackDoctor-GUI.exe
+        retention-days: 30
+    
+    - name: Create release
+      if: ${{ github.event.inputs.upload_artifact == 'true' && github.ref == 'refs/heads/main' }}
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.0-${{ github.run_number }}
+        name: Modpack Doctor GUI v1.0.0-${{ github.run_number }}
+        body: |
+          Automated release of Modpack Doctor GUI
+          
+          ## Features
+          - Advanced Tkinter GUI with mod list and details panels
+          - Real-time mod analysis with issue detection
+          - Modrinth integration for mod enrichment
+          - Hardware-based JVM optimization recommendations
+          - Markdown report export
+          - Mod disable/enable functionality
+          - Comprehensive caching system
+          
+          ## Usage
+          1. Download ModpackDoctor-GUI.exe
+          2. Run the executable
+          3. Select your mods folder
+          4. Click "Analyze" to scan and analyze your mods
+          
+        files: dist/ModpackDoctor-GUI.exe
+        draft: false
+        prerelease: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

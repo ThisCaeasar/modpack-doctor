@@ -28,10 +28,14 @@ class PluginRegistry:
         """Load default rule plugins."""
         try:
             # Import the large file rule
-            from .rules.large_file import LargeFileRule
+            from ..plugins.rules.large_file import LargeFileRule
             self.rules.append(LargeFileRule())
         except ImportError:
-            pass
+            try:
+                from .rules.large_file import LargeFileRule
+                self.rules.append(LargeFileRule())
+            except ImportError:
+                pass
     
     def register_rule(self, rule: AnalysisRule):
         """
