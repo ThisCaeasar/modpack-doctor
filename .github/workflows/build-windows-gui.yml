@@ -1,0 +1,40 @@
+name: Build Windows GUI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip and install build tools
+        run: |
+          python -m pip install --upgrade pip wheel setuptools pyinstaller
+
+      - name: Install project dependencies (if present)
+        shell: pwsh
+        run: |
+          if (Test-Path 'requirements.txt') { pip install -r requirements.txt }
+          elseif (Test-Path 'requirements_Version3.txt') { pip install -r requirements_Version3.txt }
+          else { Write-Host "No requirements file found, skipping." }
+
+      - name: Build GUI with PyInstaller
+        run: |
+          pyinstaller --noconfirm --windowed --onefile --name "ModpackDoctor-GUI" modpack_doctor_gui.py
+
+      - name: Upload artifact (.exe inside)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModpackDoctor-GUI-windows
+          path: dist/ModpackDoctor-GUI.exe
