@@ -20,6 +20,31 @@
   - Modrinth API по SHA-1 (`--online`).
   - CurseForge API (`--curseforge`), с извлечением зависимостей/совместимых версий и ссылок.
 
+## One-click GUI
+
+**Самый простой способ использования** — графический интерфейс с поддержкой всех функций:
+
+### Локальный запуск
+Двойной клик по соответствующему файлу:
+- **Windows**: `run_windows.bat`
+- **macOS**: `run_macos.command` 
+- **Linux**: `run_linux.sh`
+
+### Предсобранные версии
+Скачайте готовые исполняемые файлы из [релизов](https://github.com/ThisCaeasar/modpack-doctor/releases):
+- `ModpackDoctor-GUI.exe` — для Windows
+- `ModpackDoctor-GUI` — для macOS  
+- `ModpackDoctor-GUI` — для Linux
+
+GUI автоматически найдет нужный скрипт анализа (работает с текущими и будущими именами файлов) и откроет сгенерированный отчет по завершении.
+
+### Сборка GUI самостоятельно
+Для создания собственного исполняемого файла:
+```bash
+pip install pyinstaller
+pyinstaller --noconsole --onefile modpack_doctor_gui.py --name ModpackDoctor-GUI
+```
+
 ## Требования
 
 - Python 3.10+ (рекомендуется 3.11+)
@@ -33,7 +58,7 @@
 pip install -r requirements.txt
 ```
 
-## Быстрый старт
+## Быстрый старт (командная строка)
 
 1) Поместите `modpack_doctor.py` рядом с папкой `mods`, либо выше.
 2) Запустите:
