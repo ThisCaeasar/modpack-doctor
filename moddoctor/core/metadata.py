@@ -16,7 +16,8 @@ except ImportError:
 
 from .model import ModInfo, Dependency, Loader
 from ..util.image_utils import load_icon_from_bytes, create_placeholder_icon
-from ..util.cache import get_cached_icon_path, set_cached_icon, icon_to_bytes
+from ..util.cache import get_cached_icon_path, set_cached_icon
+from ..util.image_utils import icon_to_bytes
 
 
 def extract_mod_info(jar_file: Path) -> Optional[ModInfo]:

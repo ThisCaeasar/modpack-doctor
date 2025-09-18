@@ -299,7 +299,6 @@ class ModpackDoctorGUI:
         
         self.progress_bar = ttk.Progressbar(self.status_frame, mode="indeterminate")
         self.progress_bar.grid(row=0, column=1, sticky="e", padx=(10, 0))
-
     def browse_folder(self):
         """Browse for mods folder."""
         folder = filedialog.askdirectory(
@@ -513,6 +512,9 @@ class ModpackDoctorGUI:
         
         # Configure colors
         self.mod_tree.set(item_id, "#0", "")  # Icon column
+        
+        # Store mod reference
+        self.mod_tree.set(item_id, "mod_ref", mod)
     
     def _get_mod_status(self, mod: ModInfo) -> str:
         """Get status string for a mod based on its issues."""
@@ -567,402 +569,234 @@ class ModpackDoctorGUI:
         self.icon_cache[cache_key] = tk_icon
         
         return tk_icon
-
-    def on_mod_selected(self, event):
-        """Handle mod selection in tree."""
-        selection = self.mod_tree.selection()
-        if not selection:
-            self.selected_mod = None
-            self.clear_details()
-            self.disable_selected_btn.config(state="disabled")
-            return
         
-        item = selection[0]
+        # Buttons frame
+        buttons_frame = ttk.Frame(main_frame)
+        buttons_frame.grid(row=row, column=0, columnspan=2, pady=10)
         
-        # Find the selected mod
-        mod_name = self.mod_tree.item(item, "values")[0]
-        selected_mod = None
+        self.run_button = ttk.Button(buttons_frame, text="Run Analysis", command=self.run_analysis)
+        self.run_button.pack(side=tk.LEFT, padx=5)
         
-        for mod in self.filtered_mods:
-            if (mod.name or mod.modid or mod.file_name) == mod_name:
-                selected_mod = mod
-                break
+        self.stop_button = ttk.Button(buttons_frame, text="Stop", command=self.stop_analysis, state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=5)
         
-        self.selected_mod = selected_mod
-        self.update_details(selected_mod)
-        self.disable_selected_btn.config(state="normal" if selected_mod else "disabled")
+        ttk.Button(buttons_frame, text="Clear Log", command=self.clear_log).pack(side=tk.LEFT, padx=5)
+        
+        row += 1
+        
+        # Log frame
+        log_frame = ttk.LabelFrame(main_frame, text="Output Log", padding="5")
+        log_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        main_frame.rowconfigure(row, weight=1)
+        
+        # Output text
+        self.output_text = scrolledtext.ScrolledText(log_frame, height=15, state=tk.DISABLED)
+        self.output_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Progress bar
+        row += 1
+        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
+        self.progress.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        
+    def browse_folder(self):
+        folder = filedialog.askdirectory(title="Select Mods Folder")
+        if folder:
+            self.mods_folder.set(folder)
     
-    def clear_details(self):
-        """Clear the details panel."""
-        self.mod_icon_label.config(image="")
-        self.mod_name_label.config(text="Select a mod to view details")
-        self.mod_version_label.config(text="")
-        self.mod_loader_label.config(text="")
-        
-        self.description_text.config(state="normal")
-        self.description_text.delete(1.0, tk.END)
-        self.description_text.config(state="disabled")
-        
-        self.issues_text.config(state="normal")
-        self.issues_text.delete(1.0, tk.END)
-        self.issues_text.config(state="disabled")
+    def log_message(self, message):
+        """Add message to the output log"""
+        self.output_text.config(state=tk.NORMAL)
+        self.output_text.insert(tk.END, message + "\n")
+        self.output_text.see(tk.END)
+        self.output_text.config(state=tk.DISABLED)
+        self.root.update_idletasks()
     
-    def update_details(self, mod: ModInfo):
-        """Update details panel for selected mod."""
-        if not mod:
-            self.clear_details()
-            return
-        
-        # Update basic info
-        name = mod.name or mod.modid or mod.file_name
-        self.mod_name_label.config(text=name)
-        
-        version_text = f"Version: {mod.version or 'Unknown'}"
-        if mod.authors:
-            version_text += f" by {', '.join(mod.authors)}"
-        self.mod_version_label.config(text=version_text)
-        
-        loader_text = f"Loader: {mod.loader or 'Unknown'}"
-        if mod.minecraft_versions:
-            loader_text += f" | MC: {', '.join(mod.minecraft_versions)}"
-        self.mod_loader_label.config(text=loader_text)
-        
-        # Update icon
-        if ImageTk and mod.icon_image:
-            pil_icon = mod.icon_image.resize((64, 64), Image.Resampling.LANCZOS)
-            tk_icon = ImageTk.PhotoImage(pil_icon)
-            self.mod_icon_label.config(image=tk_icon)
-            self.mod_icon_label.image = tk_icon  # Keep reference
-        else:
-            self.mod_icon_label.config(image="")
-        
-        # Update description
-        self.description_text.config(state="normal")
-        self.description_text.delete(1.0, tk.END)
-        
-        description = mod.description or "No description available."
-        if mod.homepage:
-            description += f"\n\nHomepage: {mod.homepage}"
-        
-        self.description_text.insert(1.0, description)
-        self.description_text.config(state="disabled")
-        
-        # Update issues
-        self.update_issues_for_mod(mod)
+    def clear_log(self):
+        """Clear the output log"""
+        self.output_text.config(state=tk.NORMAL)
+        self.output_text.delete(1.0, tk.END)
+        self.output_text.config(state=tk.DISABLED)
     
-    def update_issues_for_mod(self, mod: ModInfo):
-        """Update issues text for selected mod."""
-        self.issues_text.config(state="normal")
-        self.issues_text.delete(1.0, tk.END)
+    def find_doctor_script(self):
+        """Find the modpack doctor script, trying both possible names"""
+        script_dir = Path(__file__).parent
         
-        if not self.analysis_result:
-            self.issues_text.insert(1.0, "No analysis performed yet.")
-            self.issues_text.config(state="disabled")
-            return
+        # When running as a PyInstaller bundle, use the temp directory
+        if getattr(sys, 'frozen', False):
+            script_dir = Path(sys._MEIPASS)
         
-        # Find issues for this mod
-        mod_issues = [issue for issue in self.analysis_result.issues 
-                     if mod.file_name in issue.mod_file]
+        # Try both possible names for compatibility
+        candidates = [
+            script_dir / "modpack_doctor_Version3.py",
+            script_dir / "modpack_doctor.py"
+        ]
         
-        if not mod_issues:
-            self.issues_text.insert(1.0, "✅ No issues found for this mod.")
-        else:
-            # Group by severity
-            errors = [i for i in mod_issues if i.get_severity_enum() == Severity.ERROR]
-            warnings = [i for i in mod_issues if i.get_severity_enum() == Severity.WARNING]
-            infos = [i for i in mod_issues if i.get_severity_enum() == Severity.INFO]
-            
-            text_parts = []
-            
-            if errors:
-                text_parts.append("❌ ERRORS:")
-                for issue in errors:
-                    text_parts.append(f"  • {issue.message}")
-                    if issue.suggestion:
-                        text_parts.append(f"    💡 {issue.suggestion}")
-                text_parts.append("")
-            
-            if warnings:
-                text_parts.append("⚠️ WARNINGS:")
-                for issue in warnings:
-                    text_parts.append(f"  • {issue.message}")
-                    if issue.suggestion:
-                        text_parts.append(f"    💡 {issue.suggestion}")
-                text_parts.append("")
-            
-            if infos:
-                text_parts.append("ℹ️ INFO:")
-                for issue in infos:
-                    text_parts.append(f"  • {issue.message}")
-                    if issue.suggestion:
-                        text_parts.append(f"    💡 {issue.suggestion}")
-            
-            self.issues_text.insert(1.0, "\n".join(text_parts))
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
         
-        self.issues_text.config(state="disabled")
+        # If not found in script directory, try current working directory
+        for name in ["modpack_doctor_Version3.py", "modpack_doctor.py"]:
+            candidate = Path.cwd() / name
+            if candidate.exists():
+                return candidate
+        
+        return None
     
-    def show_context_menu(self, event):
-        """Show context menu on right click."""
-        item = self.mod_tree.identify_row(event.y)
-        if item:
-            self.mod_tree.selection_set(item)
-            self.on_mod_selected(None)  # Update selection
-            self.context_menu.post(event.x_root, event.y_root)
+    def build_command(self, doctor_script):
+        """Build the command line arguments for the doctor script"""
+        if not self.mods_folder.get():
+            raise ValueError("Please select a mods folder")
+        
+        # Use sys.executable to ensure we use the same Python interpreter
+        cmd = [sys.executable, str(doctor_script), self.mods_folder.get()]
+        
+        if self.online.get():
+            cmd.append("--online")
+        
+        if self.curseforge.get():
+            cmd.append("--curseforge")
+            if self.curseforge_key.get():
+                cmd.extend(["--curseforge-key", self.curseforge_key.get()])
+        
+        if self.mc_version.get():
+            cmd.extend(["--mc", self.mc_version.get()])
+        
+        if self.loader.get():
+            cmd.extend(["--loader", self.loader.get()])
+        
+        if self.ram_gb.get():
+            try:
+                float(self.ram_gb.get())
+                cmd.extend(["--ram-gb", self.ram_gb.get()])
+            except ValueError:
+                raise ValueError("RAM must be a valid number")
+        
+        if self.no_db_update.get():
+            cmd.append("--no-db-update")
+        
+        return cmd
     
-    def update_action_buttons(self):
-        """Update state of action buttons based on analysis results."""
-        has_analysis = self.analysis_result is not None
-        has_issues = has_analysis and len(self.analysis_result.issues) > 0
-        
-        self.disable_duplicates_btn.config(state="normal" if has_issues else "disabled")
-        self.disable_conflicts_btn.config(state="normal" if has_issues else "disabled") 
-        self.disable_errors_btn.config(state="normal" if has_issues else "disabled")
-    
-    def disable_selected_mod(self):
-        """Disable the currently selected mod."""
-        if not self.selected_mod:
-            return
-        
-        mod_path = Path(self.selected_mod.path)
-        if disable_mod_file(mod_path):
-            messagebox.showinfo("Success", f"Disabled {self.selected_mod.file_name}")
-            self.start_analysis()  # Refresh
-        else:
-            messagebox.showerror("Error", f"Failed to disable {self.selected_mod.file_name}")
-    
-    def open_selected_in_explorer(self):
-        """Open selected mod file in explorer."""
-        if not self.selected_mod:
-            return
-        
-        mod_path = Path(self.selected_mod.path)
-        if open_in_explorer(mod_path):
-            self.status_label.config(text=f"Opened {self.selected_mod.file_name} in explorer")
-        else:
-            messagebox.showerror("Error", "Failed to open file in explorer")
-    
-    def disable_duplicates(self):
-        """Disable duplicate mods."""
-        if not self.analysis_result:
-            return
-        
-        count = disable_duplicates(self.mods, self.analysis_result.issues)
-        if count > 0:
-            messagebox.showinfo("Success", f"Disabled {count} duplicate mod(s)")
-            self.start_analysis()  # Refresh
-        else:
-            messagebox.showinfo("Info", "No duplicate mods to disable")
-    
-    def disable_conflicts(self):
-        """Disable conflicting mods."""
-        if not self.analysis_result:
-            return
-        
-        count = disable_conflicts(self.mods, self.analysis_result.issues)
-        if count > 0:
-            messagebox.showinfo("Success", f"Disabled {count} conflicting mod(s)")
-            self.start_analysis()  # Refresh
-        else:
-            messagebox.showinfo("Info", "No conflicting mods to disable")
-    
-    def disable_all_errors(self):
-        """Disable all mods with errors."""
-        if not self.analysis_result:
-            return
-        
-        error_count = sum(1 for issue in self.analysis_result.issues 
-                         if issue.get_severity_enum() == Severity.ERROR)
-        
-        if error_count == 0:
-            messagebox.showinfo("Info", "No mods with errors to disable")
-            return
-        
-        result = messagebox.askyesno("Confirm", 
-            f"This will disable all mods with errors ({error_count} issues). Continue?")
-        if not result:
-            return
-        
-        count = disable_all_errors(self.mods, self.analysis_result.issues)
-        if count > 0:
-            messagebox.showinfo("Success", f"Disabled {count} mod(s) with errors")
-            self.start_analysis()  # Refresh
-        else:
-            messagebox.showinfo("Info", "No mods were disabled")
-    
-    def export_report(self):
-        """Export analysis report to Markdown file."""
-        if not self.analysis_result:
-            messagebox.showerror("Error", "No analysis results to export")
-            return
-        
-        file_path = filedialog.asksaveasfilename(
-            title="Export Report",
-            defaultextension=".md",
-            filetypes=[("Markdown files", "*.md"), ("All files", "*.*")]
-        )
-        
-        if not file_path:
-            return
-        
+    def run_analysis_thread(self):
+        """Run the analysis in a separate thread"""
         try:
-            report_content = generate_markdown_report(self.analysis_result)
-            if export_report_to_file(report_content, file_path):
-                messagebox.showinfo("Success", f"Report exported to {file_path}")
-                self.status_label.config(text=f"Report exported to {Path(file_path).name}")
+            doctor_script = self.find_doctor_script()
+            if not doctor_script:
+                self.log_message("ERROR: Could not find modpack doctor script!")
+                self.log_message("Looking for: modpack_doctor_Version3.py or modpack_doctor.py")
+                return
+            
+            self.log_message(f"Found doctor script: {doctor_script}")
+            
+            cmd = self.build_command(doctor_script)
+            self.log_message(f"Running command: {' '.join(cmd)}")
+            self.log_message("-" * 50)
+            
+            # Start the process
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                universal_newlines=True,
+                bufsize=1
+            )
+            
+            # Read output line by line
+            for line in iter(self.process.stdout.readline, ''):
+                if line:
+                    self.log_message(line.rstrip())
+                if self.process.poll() is not None:
+                    break
+            
+            # Wait for process to complete
+            self.process.wait()
+            
+            if self.process.returncode == 0:
+                self.log_message("-" * 50)
+                self.log_message("Analysis completed successfully!")
+                
+                # Try to find and open the generated report
+                mods_path = Path(self.mods_folder.get())
+                report_path = mods_path / "modpack_doctor_output" / "modpack_report.md"
+                
+                if report_path.exists():
+                    self.log_message(f"Opening report: {report_path}")
+                    self.open_file(report_path)
+                else:
+                    self.log_message("Report file not found at expected location")
             else:
-                messagebox.showerror("Error", "Failed to export report")
+                self.log_message(f"Analysis failed with exit code: {self.process.returncode}")
+                
+        except ValueError as e:
+            self.log_message(f"ERROR: {e}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to export report: {e}")
+            self.log_message(f"ERROR: {e}")
+        finally:
+            # Re-enable UI
+            self.root.after(0, self.analysis_finished)
     
-    def clear_cache(self):
-        """Clear analysis cache."""
-        result = messagebox.askyesno("Confirm", "Clear all cached mod data?")
-        if result:
-            if clear_cache():
-                messagebox.showinfo("Success", "Cache cleared successfully")
-                self.status_label.config(text="Cache cleared")
-            else:
-                messagebox.showerror("Error", "Failed to clear cache")
+    def open_file(self, file_path):
+        """Open a file with the default system application"""
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(file_path)
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.run(['open', file_path])
+            else:  # Linux and others
+                subprocess.run(['xdg-open', file_path])
+        except Exception as e:
+            self.log_message(f"Could not open file: {e}")
+            # Fallback: show file location
+            self.log_message(f"Report saved to: {file_path}")
     
-    def show_jvm_dialog(self):
-        """Show JVM optimization dialog."""
-        JVMDialog(self.root)
-    
-    def _on_search_changed(self, *args):
-        """Handle search text change."""
-        if hasattr(self, 'mod_tree'):
-            self.update_mod_list()
-    
-    def _on_filter_changed(self, *args):
-        """Handle filter change."""
-        if hasattr(self, 'mod_tree'):
-            self.update_mod_list()
-    
-    def restore_window_state(self):
-        """Restore window state from settings."""
-        geometry = self.settings.get("window_geometry", "1200x800")
-        self.root.geometry(geometry)
+    def run_analysis(self):
+        """Start the analysis"""
+        if not self.mods_folder.get():
+            messagebox.showerror("Error", "Please select a mods folder")
+            return
         
-        if self.settings.get("window_maximized", False):
-            self.root.state("zoomed" if platform.system() == "Windows" else "normal")
+        # Disable UI
+        self.run_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        self.progress.start()
+        
+        # Clear previous output
+        self.clear_log()
+        
+        # Start analysis in background thread
+        thread = threading.Thread(target=self.run_analysis_thread, daemon=True)
+        thread.start()
     
-    def save_window_state(self):
-        """Save window state to settings."""
-        self.settings["window_geometry"] = self.root.geometry()
-        self.settings["window_maximized"] = self.root.state() == "zoomed"
-        save_settings(self.settings)
+    def stop_analysis(self):
+        """Stop the running analysis"""
+        if self.process:
+            try:
+                self.process.terminate()
+                self.log_message("Analysis stopped by user")
+            except Exception as e:
+                self.log_message(f"Error stopping process: {e}")
+        
+        self.analysis_finished()
     
-    def _on_closing(self):
-        """Handle window closing."""
-        self.save_window_state()
-        self.save_settings()
-        self.root.destroy()
+    def analysis_finished(self):
+        """Re-enable UI after analysis"""
+        self.run_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
+        self.progress.stop()
+        self.process = None
     
     def run(self):
-        """Start the GUI."""
-        # Configure treeview colors
-        style = ttk.Style()
-        
-        # Configure status colors
-        self.mod_tree.tag_configure("ok_color", foreground="darkgreen")
-        self.mod_tree.tag_configure("info_color", foreground="blue")
-        self.mod_tree.tag_configure("warning_color", foreground="orange")
-        self.mod_tree.tag_configure("error_color", foreground="red")
-        
+        """Start the GUI"""
         self.root.mainloop()
 
 
-class JVMDialog:
-    """Dialog for JVM optimization settings."""
-    
-    def __init__(self, parent):
-        self.parent = parent
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.title("JVM Optimization")
-        self.dialog.geometry("600x500")
-        self.dialog.resizable(False, False)
-        self.dialog.transient(parent)
-        self.dialog.grab_set()
-        
-        # Center dialog
-        self.dialog.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() // 2) - (600 // 2)
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - (500 // 2)
-        self.dialog.geometry(f"600x500+{x}+{y}")
-        
-        self.create_widgets()
-        self.load_recommendations()
-    
-    def create_widgets(self):
-        """Create dialog widgets."""
-        main_frame = ttk.Frame(self.dialog, padding=10)
-        main_frame.pack(fill="both", expand=True)
-        
-        # System info
-        info_frame = ttk.LabelFrame(main_frame, text="System Information", padding=5)
-        info_frame.pack(fill="x", pady=(0, 10))
-        
-        self.system_info_text = scrolledtext.ScrolledText(info_frame, height=6, state="disabled")
-        self.system_info_text.pack(fill="both", expand=True)
-        
-        # JVM args
-        args_frame = ttk.LabelFrame(main_frame, text="Recommended JVM Arguments", padding=5)
-        args_frame.pack(fill="both", expand=True, pady=(0, 10))
-        
-        self.jvm_args_text = scrolledtext.ScrolledText(args_frame, height=8, wrap=tk.WORD)
-        self.jvm_args_text.pack(fill="both", expand=True)
-        
-        # Buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill="x")
-        
-        ttk.Button(button_frame, text="Copy to Clipboard", command=self.copy_to_clipboard).pack(side="left", padx=(0, 5))
-        ttk.Button(button_frame, text="Close", command=self.dialog.destroy).pack(side="right")
-    
-    def load_recommendations(self):
-        """Load and display JVM recommendations."""
-        try:
-            recommendations = recommend_jvm_args()
-            
-            # System info
-            system_info = recommendations["system_info"]
-            info_text = f"""Operating System: {system_info['os']} {system_info['os_version']}
-Architecture: {system_info['architecture']}
-CPU: {system_info['cpu_name']} ({system_info['cpu_count']} cores)
-Total RAM: {system_info['total_ram_gb']:.1f} GB
-Available RAM: {system_info['available_ram_gb']:.1f} GB
-Allocated RAM: {recommendations['allocated_ram_gb']:.1f} GB"""
-            
-            self.system_info_text.config(state="normal")
-            self.system_info_text.insert(1.0, info_text)
-            self.system_info_text.config(state="disabled")
-            
-            # JVM args
-            jvm_args = recommendations["jvm_args"]
-            self.jvm_args_text.insert(1.0, jvm_args)
-            
-        except Exception as e:
-            error_text = f"Failed to generate recommendations: {e}"
-            self.system_info_text.config(state="normal")
-            self.system_info_text.insert(1.0, error_text)
-            self.system_info_text.config(state="disabled")
-    
-    def copy_to_clipboard(self):
-        """Copy JVM args to clipboard."""
-        args = self.jvm_args_text.get(1.0, tk.END).strip()
-        self.dialog.clipboard_clear()
-        self.dialog.clipboard_append(args)
-        messagebox.showinfo("Copied", "JVM arguments copied to clipboard")
-
-
 def main():
-    """Main entry point."""
-    try:
-        app = ModpackDoctorGUI()
-        app.run()
-    except Exception as e:
-        messagebox.showerror("Fatal Error", f"Application failed to start: {e}")
-        sys.exit(1)
+    # Create and run the GUI
+    app = ModpackDoctorGUI()
+    app.run()
 
 
 if __name__ == "__main__":

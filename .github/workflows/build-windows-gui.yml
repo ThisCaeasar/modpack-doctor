@@ -1,0 +1,56 @@
+name: Build Windows GUI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for the build'
+        required: false
+        default: 'dev'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+        
+    - name: Build GUI executable
+      run: |
+        pyinstaller --noconsole --onefile modpack_doctor_gui.py `
+          --name ModpackDoctor-GUI `
+          --add-data "moddoctor;moddoctor" `
+          --add-data "data_known_conflicts_Version3.json;." `
+          --add-data "data_performance_mods_Version3.json;." `
+          --distpath dist `
+          --workpath build
+          
+    - name: Test executable
+      run: |
+        if (Test-Path "dist\ModpackDoctor-GUI.exe") {
+          Write-Host "✅ Executable built successfully"
+          $size = (Get-Item "dist\ModpackDoctor-GUI.exe").Length / 1MB
+          Write-Host "📦 Size: $([math]::Round($size, 2)) MB"
+        } else {
+          Write-Host "❌ Executable not found"
+          exit 1
+        }
+      
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ModpackDoctor-GUI-Windows
+        path: dist/ModpackDoctor-GUI.exe
+        retention-days: 30
