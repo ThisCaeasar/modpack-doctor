@@ -11,6 +11,7 @@ import re
 import sys
 import time
 import zipfile
+import platform
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
@@ -83,6 +84,11 @@ class AnalysisResult:
     mixed_loaders_warning: bool
     recommendations: Dict[str, Any]
     kb_info: Dict[str, Any] = field(default_factory=dict)
+    crash_analysis: Optional[Dict[str, Any]] = None
+    hardware_profile: Optional[Dict[str, Any]] = None
+    mixed_loader_findings: List[Dict[str, Any]] = field(default_factory=list)
+    library_pillar_issues: List[Dict[str, Any]] = field(default_factory=list)
+    fix_plan: List[Dict[str, Any]] = field(default_factory=list)
 
 # ---- Utils ----
 
@@ -625,7 +631,399 @@ def load_knowledge_base(base_dir: Path, out_dir: Path, args) -> Tuple[dict, dict
     }
     return local_conf, local_perf, kb_info
 
-# ---- Analysis ----
+# ---- Crash Log Analysis ----
+
+def analyze_crash_log(crash_log_path: Path) -> Optional[Dict[str, Any]]:
+    """Analyze crash log for common patterns and issues"""
+    if not crash_log_path.exists():
+        return None
+    
+    try:
+        with open(crash_log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+    except Exception:
+        return None
+    
+    issues = []
+    
+    # Pattern for missing/unavailable mods
+    missing_mod_patterns = [
+        r"Mod '([^']+)' is not available",
+        r"Could not find required mod '([^']+)'",
+        r"Missing \[([^\]]+)\]",
+        r"Dependency '([^']+)' was not found"
+    ]
+    
+    for pattern in missing_mod_patterns:
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        for match in matches:
+            issues.append({
+                "type": "missing_mod",
+                "mod": match,
+                "description": f"Missing mod: {match}",
+                "action": f"Install mod '{match}' or remove mods that depend on it"
+            })
+    
+    # Pattern for wrong loader
+    loader_patterns = [
+        (r"Cannot load Fabric mod", "fabric", "forge"),
+        (r"Cannot load Forge mod", "forge", "fabric"),
+        (r"Fabric mod .+ cannot be loaded", "fabric", "other"),
+        (r"Forge mod .+ cannot be loaded", "forge", "other")
+    ]
+    
+    for pattern, expected_loader, current_loader in loader_patterns:
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        for match in matches:
+            issues.append({
+                "type": "wrong_loader",
+                "expected_loader": expected_loader,
+                "current_loader": current_loader,
+                "description": f"Mod requires {expected_loader} but pack uses {current_loader}",
+                "action": f"Remove incompatible mods or use {expected_loader} loader"
+            })
+    
+    # Pattern for duplicate versions
+    duplicate_patterns = [
+        r"Found duplicate mod '([^']+)'",
+        r"Multiple versions of '([^']+)' found",
+        r"Duplicate mod files: ([^\n]+)"
+    ]
+    
+    for pattern in duplicate_patterns:
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        for match in matches:
+            issues.append({
+                "type": "duplicate_mod",
+                "mod": match,
+                "description": f"Duplicate mod found: {match}",
+                "action": f"Remove older versions of '{match}'"
+            })
+    
+    # Pattern for Mixin errors
+    mixin_patterns = [
+        r"Mixin apply for config '([^']+)' failed",
+        r"Mixin '([^']+)' failed to apply",
+        r"MixinEnvironment: ([^\n]+)"
+    ]
+    
+    for pattern in mixin_patterns:
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        for match in matches:
+            issues.append({
+                "type": "mixin_error",
+                "details": match,
+                "description": f"Mixin configuration error: {match}",
+                "action": "Check mod compatibility and remove conflicting mods"
+            })
+    
+    # Pattern for NoClassDefFoundError
+    class_error_patterns = [
+        r"NoClassDefFoundError: ([^\s]+)",
+        r"ClassNotFoundException: ([^\s]+)"
+    ]
+    
+    for pattern in class_error_patterns:
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        for match in matches:
+            issues.append({
+                "type": "class_not_found",
+                "class": match,
+                "description": f"Missing class: {match}",
+                "action": "Install missing dependencies or check mod compatibility"
+            })
+    
+    # Extract system info if available
+    system_info = {}
+    
+    # Java version
+    java_match = re.search(r"Java Version: ([^\n]+)", content)
+    if java_match:
+        system_info["java_version"] = java_match.group(1)
+    
+    # Operating system
+    os_match = re.search(r"Operating System: ([^\n]+)", content)
+    if os_match:
+        system_info["operating_system"] = os_match.group(1)
+    
+    # GPU info
+    gpu_matches = re.findall(r"GL_RENDERER: ([^\n]+)", content)
+    if gpu_matches:
+        system_info["gpu"] = gpu_matches[0]
+    
+    # Memory info
+    memory_match = re.search(r"Memory: (\d+) bytes \((\d+) MB\) / (\d+) bytes \((\d+) MB\)", content)
+    if memory_match:
+        system_info["memory_used_mb"] = int(memory_match.group(2))
+        system_info["memory_total_mb"] = int(memory_match.group(4))
+    
+    return {
+        "file_path": str(crash_log_path),
+        "issues_found": len(issues),
+        "issues": issues,
+        "system_info": system_info,
+        "analysis_timestamp": time.time()
+    }
+
+# ---- Mixed Loader Detection ----
+
+def detect_mixed_loaders_detailed(mods: List[ModInfo]) -> List[Dict[str, Any]]:
+    """Detect mixed loader issues with detailed reporting"""
+    findings = []
+    
+    # Count mods by loader
+    loader_counts = {"fabric": 0, "forge": 0, "quilt": 0, "neoforge": 0, "unknown": 0}
+    mod_by_loader = {"fabric": [], "forge": [], "quilt": [], "neoforge": [], "unknown": []}
+    
+    for mod in mods:
+        loader = mod.loader or "unknown"
+        loader_counts[loader] += 1
+        mod_by_loader[loader].append(mod)
+    
+    # Detect Fabric/Quilt mods in Forge/NeoForge environment
+    if (loader_counts["forge"] > 0 or loader_counts["neoforge"] > 0) and (loader_counts["fabric"] > 0 or loader_counts["quilt"] > 0):
+        fabric_mods = mod_by_loader["fabric"] + mod_by_loader["quilt"]
+        for mod in fabric_mods:
+            findings.append({
+                "type": "fabric_in_forge",
+                "mod": mod.modid or mod.name or mod.file_name,
+                "filename": mod.file_name,
+                "detected_loader": mod.loader,
+                "recommended_action": "remove_or_replace",
+                "description": f"Fabric/Quilt mod '{mod.name or mod.file_name}' found in Forge/NeoForge pack"
+            })
+    
+    # Detect Forge/NeoForge mods in Fabric/Quilt environment  
+    if (loader_counts["fabric"] > 0 or loader_counts["quilt"] > 0) and (loader_counts["forge"] > 0 or loader_counts["neoforge"] > 0):
+        forge_mods = mod_by_loader["forge"] + mod_by_loader["neoforge"]
+        for mod in forge_mods:
+            findings.append({
+                "type": "forge_in_fabric",
+                "mod": mod.modid or mod.name or mod.file_name,
+                "filename": mod.file_name,
+                "detected_loader": mod.loader,
+                "recommended_action": "remove_or_replace",
+                "description": f"Forge/NeoForge mod '{mod.name or mod.file_name}' found in Fabric/Quilt pack"
+            })
+    
+    # Detect common wrong-loader placeholder mods
+    wrongloader_patterns = [
+        ("journeymap", "wrongloader", "correct variant needed"),
+        ("jei", "wrongloader", "JEI vs REI confusion"),
+        ("optifine", "wrongloader", "use OptiFabric for Fabric")
+    ]
+    
+    for mod in mods:
+        filename_lower = mod.file_name.lower()
+        for pattern, issue_type, description in wrongloader_patterns:
+            if pattern in filename_lower and "wrongloader" in filename_lower:
+                findings.append({
+                    "type": "wrongloader_placeholder",
+                    "mod": mod.modid or mod.name or mod.file_name,
+                    "filename": mod.file_name,
+                    "pattern": pattern,
+                    "recommended_action": "replace_with_correct_variant",
+                    "description": f"Wrong loader placeholder detected: {description}"
+                })
+    
+    return findings
+
+# ---- Library Pillar Checks ----
+
+def check_library_pillars(mods: List[ModInfo], loader: Optional[str], mc_versions: List[str]) -> List[Dict[str, Any]]:
+    """Check for missing or incompatible key library mods"""
+    issues = []
+    
+    # Key libraries by loader
+    key_libraries = {
+        "fabric": ["architectury-api", "cloth-config", "geckolib", "modmenu"],
+        "forge": ["architectury-api", "cloth-config", "geckolib", "curios", "bookshelf", "balm"],
+        "neoforge": ["architectury-api", "cloth-config", "geckolib", "curios", "bookshelf", "balm"],
+        "quilt": ["architectury-api", "cloth-config", "geckolib", "modmenu"]
+    }
+    
+    if not loader or loader not in key_libraries:
+        return issues
+    
+    # Extract installed mod IDs
+    installed_modids = set()
+    for mod in mods:
+        if mod.modid:
+            installed_modids.add(mod.modid.lower())
+    
+    # Check dependencies of installed mods
+    required_libraries = set()
+    for mod in mods:
+        for dep in mod.depends:
+            if dep.kind == "required" and dep.modid:
+                dep_id = dep.modid.lower()
+                if dep_id in [lib.lower() for lib in key_libraries[loader]]:
+                    required_libraries.add(dep_id)
+    
+    # Check for missing required libraries
+    for lib in required_libraries:
+        if lib not in installed_modids:
+            issues.append({
+                "type": "missing_library",
+                "library": lib,
+                "loader": loader,
+                "severity": "high",
+                "description": f"Required library '{lib}' is missing",
+                "action": f"Install {lib} for {loader}"
+            })
+    
+    # Check for common library incompatibilities
+    incompatible_pairs = [
+        ("cloth-config", "cloth-config-forge", "Different loader variants"),
+        ("geckolib", "geckolib-fabric", "Different loader variants")
+    ]
+    
+    for lib1, lib2, reason in incompatible_pairs:
+        if lib1.lower() in installed_modids and lib2.lower() in installed_modids:
+            issues.append({
+                "type": "incompatible_libraries",
+                "libraries": [lib1, lib2],
+                "reason": reason,
+                "severity": "medium",
+                "description": f"Incompatible libraries: {lib1} and {lib2}",
+                "action": f"Remove one of: {lib1}, {lib2}"
+            })
+    
+    return issues
+
+# ---- Hardware Analysis ----
+
+def analyze_hardware() -> Dict[str, Any]:
+    """Analyze hardware for recommendations"""
+    profile = {
+        "cpu_cores": 1,
+        "cpu_threads": 1,
+        "ram_total_gb": 4.0,
+        "gpu_vendor": "unknown",
+        "gpu_vram_mb": 0,
+        "os": platform.system(),
+        "analysis_method": "basic"
+    }
+    
+    # CPU info
+    try:
+        profile["cpu_cores"] = os.cpu_count() or 1
+        profile["cpu_threads"] = profile["cpu_cores"]  # Simplified
+    except Exception:
+        pass
+    
+    # RAM info
+    if psutil:
+        try:
+            memory = psutil.virtual_memory()
+            profile["ram_total_gb"] = round(memory.total / (1024**3), 1)
+            profile["analysis_method"] = "psutil"
+        except Exception:
+            pass
+    
+    # Basic GPU detection
+    try:
+        if platform.system() == "Windows":
+            # Try to detect GPU via environment or basic methods
+            pass
+        elif platform.system() == "Linux":
+            # Try lspci or /proc methods
+            try:
+                import subprocess
+                result = subprocess.run(["lspci"], capture_output=True, text=True, timeout=5)
+                if "NVIDIA" in result.stdout:
+                    profile["gpu_vendor"] = "nvidia"
+                elif "AMD" in result.stdout or "Radeon" in result.stdout:
+                    profile["gpu_vendor"] = "amd"
+                elif "Intel" in result.stdout:
+                    profile["gpu_vendor"] = "intel"
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    return profile
+
+# ---- Improved Duplicate Detection ----
+
+def detect_duplicates_by_modid(mods: List[ModInfo]) -> List[Dict[str, Any]]:
+    """Detect duplicates by modid instead of just filename"""
+    duplicates = []
+    by_modid: Dict[str, List[ModInfo]] = {}
+    
+    # Group by modid
+    for mod in mods:
+        modid = mod.modid or mod.name or mod.file_name
+        key = modid.lower()
+        by_modid.setdefault(key, []).append(mod)
+    
+    # Find duplicates
+    for modid, mod_list in by_modid.items():
+        if len(mod_list) > 1:
+            # Sort by version (newest first)
+            sorted_mods = sorted(mod_list, key=lambda m: numeric_version_tuple(m.version or "0.0.0"), reverse=True)
+            
+            versions = [m.version or "unknown" for m in sorted_mods]
+            
+            duplicates.append({
+                "modid": modid,
+                "files": [m.file_name for m in sorted_mods],
+                "versions": versions,
+                "newest_file": sorted_mods[0].file_name,
+                "older_files": [m.file_name for m in sorted_mods[1:]],
+                "recommended_action": "remove_older_versions",
+                "reason": "Multiple versions of the same mod"
+            })
+    
+    return duplicates
+
+# ---- Fix Plan Generation ----
+
+def generate_fix_plan(mods: List[ModInfo], duplicates: List[Dict[str, Any]], 
+                     mixed_findings: List[Dict[str, Any]], mods_dir: Path) -> List[Dict[str, Any]]:
+    """Generate actionable fix plan"""
+    fixes = []
+    
+    # Handle duplicates
+    for dup in duplicates:
+        if "older_files" in dup and dup["older_files"]:
+            for old_file in dup["older_files"]:
+                fixes.append({
+                    "type": "remove_duplicate",
+                    "action": "move_to_disabled",
+                    "file": old_file,
+                    "reason": f"Older version of {dup['modid']}",
+                    "source_path": str(mods_dir / old_file),
+                    "target_path": str(mods_dir / "mods_disabled" / old_file),
+                    "safe": True,
+                    "reversible": True
+                })
+    
+    # Handle mixed loader issues
+    for finding in mixed_findings:
+        if finding.get("recommended_action") == "remove_or_replace":
+            fixes.append({
+                "type": "wrong_loader",
+                "action": "move_to_disabled",
+                "file": finding["filename"],
+                "reason": finding["description"],
+                "source_path": str(mods_dir / finding["filename"]),
+                "target_path": str(mods_dir / "mods_disabled" / finding["filename"]),
+                "safe": True,
+                "reversible": True
+            })
+        elif finding.get("recommended_action") == "replace_with_correct_variant":
+            fixes.append({
+                "type": "wrong_variant",
+                "action": "manual_replace",
+                "file": finding["filename"],
+                "reason": finding["description"],
+                "safe": False,
+                "manual_action_required": True,
+                "suggestion": "Download correct variant from mod page"
+            })
+    
+    return fixes
 
 def analyze_mods(mods: List[ModInfo], known_conflicts: dict) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], bool]:
     missing_dependencies = []
@@ -733,7 +1131,8 @@ def detect_known_and_potential_conflicts(mods: List[ModInfo], known_conflicts: d
 
     return known_hits, potentials
 
-def recommend_optimizations(mods: List[ModInfo], perf_db: dict, total_ram_gb: Optional[float], user_ram_gb: Optional[float]) -> Dict[str, Any]:
+def recommend_optimizations(mods: List[ModInfo], perf_db: dict, total_ram_gb: Optional[float], 
+                          user_ram_gb: Optional[float], hardware_profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     installed = set((m.modid or m.name or m.file_name).lower() for m in mods)
     loader_counts = {"fabric": 0, "forge": 0, "quilt": 0}
     for m in mods:
@@ -747,8 +1146,11 @@ def recommend_optimizations(mods: List[ModInfo], perf_db: dict, total_ram_gb: Op
             if not any(k and any(k in x for x in installed) for k in keys if k):
                 suggestions.append(mod)
 
+    # Enhanced RAM detection with hardware profile
     detected_ram_gb = None
-    if total_ram_gb:
+    if hardware_profile:
+        detected_ram_gb = hardware_profile.get("ram_total_gb")
+    elif total_ram_gb:
         detected_ram_gb = total_ram_gb
     elif psutil:
         try:
@@ -756,10 +1158,20 @@ def recommend_optimizations(mods: List[ModInfo], perf_db: dict, total_ram_gb: Op
         except Exception:
             detected_ram_gb = None
 
+    # Conservative allocation with hardware awareness
     alloc_gb = user_ram_gb
     if not alloc_gb:
         if detected_ram_gb:
-            if detected_ram_gb <= 6:
+            # More conservative defaults, especially for integrated graphics
+            gpu_vendor = (hardware_profile or {}).get("gpu_vendor", "unknown")
+            
+            if gpu_vendor == "intel":  # Integrated graphics
+                # Be more conservative with RAM allocation
+                if detected_ram_gb <= 8:
+                    alloc_gb = max(2.0, min(3.0, detected_ram_gb * 0.4))
+                else:
+                    alloc_gb = min(6.0, detected_ram_gb * 0.45)
+            elif detected_ram_gb <= 6:
                 alloc_gb = max(2.0, min(3.0, detected_ram_gb * 0.5))
             elif detected_ram_gb <= 12:
                 alloc_gb = min(6.0, detected_ram_gb * 0.6)
@@ -769,18 +1181,45 @@ def recommend_optimizations(mods: List[ModInfo], perf_db: dict, total_ram_gb: Op
         else:
             alloc_gb = 4.0
 
-    jvm_args = generate_jvm_args(alloc_gb)
+    # Generate JVM args with hardware considerations
+    jvm_args = generate_jvm_args(alloc_gb, hardware_profile)
+    
+    # Hardware-specific recommendations
+    hardware_notes = []
+    if hardware_profile:
+        gpu_vendor = hardware_profile.get("gpu_vendor", "unknown")
+        
+        if gpu_vendor == "intel":
+            hardware_notes.append("⚠️ Integrated graphics detected: Consider lowering render distance and disabling shaders")
+            hardware_notes.append("💡 Install OptiFine/Sodium for better performance on integrated graphics")
+        
+        cpu_cores = hardware_profile.get("cpu_cores", 1)
+        if cpu_cores <= 2:
+            hardware_notes.append("⚠️ Low CPU core count: Disable unnecessary background applications")
+        
+        if detected_ram_gb and detected_ram_gb <= 6:
+            hardware_notes.append("⚠️ Limited RAM: Close other applications while playing")
 
-    return {
+    result = {
         "loader": loader,
         "detected_total_ram_gb": detected_ram_gb,
         "recommended_ram_gb": alloc_gb,
         "recommended_jvm_args": jvm_args,
-        "suggested_performance_mods": suggestions
+        "suggested_performance_mods": suggestions,
+        "hardware_notes": hardware_notes
     }
+    
+    if hardware_profile:
+        result["hardware_based_tuning"] = True
+        result["gpu_vendor"] = hardware_profile.get("gpu_vendor", "unknown")
+        result["cpu_cores"] = hardware_profile.get("cpu_cores", 1)
+    
+    return result
 
-def generate_jvm_args(xmx_gb: float) -> str:
+def generate_jvm_args(xmx_gb: float, hardware_profile: Optional[Dict[str, Any]] = None) -> str:
     xmx = f"{int(xmx_gb)}G" if abs(xmx_gb - int(xmx_gb)) < 0.1 else f"{xmx_gb}G"
+    
+    # Base conservative arguments
     lines = [
         f"-Xms{xmx}",
         f"-Xmx{xmx}",
@@ -804,6 +1243,24 @@ def generate_jvm_args(xmx_gb: float) -> str:
         "-Dsun.rmi.dgc.client.gcInterval=2147483646",
         "-Dfile.encoding=UTF-8"
     ]
+    
+    # Hardware-specific adjustments
+    if hardware_profile:
+        cpu_cores = hardware_profile.get("cpu_cores", 1)
+        gpu_vendor = hardware_profile.get("gpu_vendor", "unknown")
+        
+        # Adjust GC threads for low-core systems
+        if cpu_cores <= 2:
+            lines.append("-XX:ConcGCThreads=1")
+            lines.append("-XX:ParallelGCThreads=2")
+        elif cpu_cores <= 4:
+            lines.append(f"-XX:ConcGCThreads={max(1, cpu_cores // 4)}")
+            lines.append(f"-XX:ParallelGCThreads={cpu_cores}")
+        
+        # Intel iGPU specific optimizations
+        if gpu_vendor == "intel":
+            lines.append("-Dforge.forceNoStencil=true")  # Help with integrated graphics
+    
     return " ".join(lines)
 
 # ---- Reporting ----
@@ -869,9 +1326,93 @@ def build_markdown_report(ar: AnalysisResult) -> str:
     section("Known conflicts (knowledge base)", ar.known_conflicts)
     section("Potential conflicts (heuristics)", ar.potential_conflicts)
 
+    # New sections for enhanced analysis
+    if ar.crash_analysis:
+        lines.append("## Crash Log Analysis")
+        crash = ar.crash_analysis
+        lines.append(f"- File: {crash.get('file_path', 'unknown')}")
+        lines.append(f"- Issues found: {crash.get('issues_found', 0)}")
+        
+        for issue in crash.get('issues', []):
+            lines.append(f"- **{issue.get('type', 'unknown')}**: {issue.get('description', '')}")
+            if issue.get('action'):
+                lines.append(f"  - Action: {issue['action']}")
+        
+        if crash.get('system_info'):
+            sysinfo = crash['system_info']
+            lines.append("- System info from crash:")
+            for key, value in sysinfo.items():
+                lines.append(f"  - {key}: {value}")
+        lines.append("")
+
+    if ar.hardware_profile:
+        lines.append("## Hardware Profile")
+        hw = ar.hardware_profile
+        lines.append(f"- CPU cores: {hw.get('cpu_cores', 'unknown')}")
+        lines.append(f"- CPU threads: {hw.get('cpu_threads', 'unknown')}")
+        lines.append(f"- RAM total: {hw.get('ram_total_gb', 'unknown')} GB")
+        lines.append(f"- GPU vendor: {hw.get('gpu_vendor', 'unknown')}")
+        lines.append(f"- Operating system: {hw.get('os', 'unknown')}")
+        lines.append(f"- Analysis method: {hw.get('analysis_method', 'unknown')}")
+        lines.append("")
+
+    if ar.mixed_loader_findings:
+        lines.append("## Mixed Loader Findings")
+        for finding in ar.mixed_loader_findings:
+            lines.append(f"- **{finding.get('type', 'unknown')}**: {finding.get('description', '')}")
+            lines.append(f"  - File: {finding.get('filename', 'unknown')}")
+            lines.append(f"  - Action: {finding.get('recommended_action', 'unknown')}")
+        lines.append("")
+
+    if ar.library_pillar_issues:
+        lines.append("## Library Pillar Issues")
+        for issue in ar.library_pillar_issues:
+            severity = issue.get('severity', 'unknown')
+            lines.append(f"- **{severity.upper()}**: {issue.get('description', '')}")
+            if issue.get('action'):
+                lines.append(f"  - Action: {issue['action']}")
+        lines.append("")
+
+    if ar.fix_plan:
+        lines.append("## Fix Plan")
+        lines.append("The following automated fixes are available:")
+        
+        safe_fixes = [f for f in ar.fix_plan if f.get('safe', False)]
+        manual_fixes = [f for f in ar.fix_plan if not f.get('safe', False)]
+        
+        if safe_fixes:
+            lines.append("### Safe Automated Fixes")
+            for fix in safe_fixes:
+                lines.append(f"- **{fix.get('type', 'unknown')}**: {fix.get('reason', '')}")
+                lines.append(f"  - File: {fix.get('file', 'unknown')}")
+                lines.append(f"  - Action: {fix.get('action', 'unknown')}")
+                if fix.get('reversible'):
+                    lines.append("  - ✓ Reversible (files moved to mods_disabled/)")
+        
+        if manual_fixes:
+            lines.append("### Manual Fixes Required")
+            for fix in manual_fixes:
+                lines.append(f"- **{fix.get('type', 'unknown')}**: {fix.get('reason', '')}")
+                lines.append(f"  - File: {fix.get('file', 'unknown')}")
+                if fix.get('suggestion'):
+                    lines.append(f"  - Suggestion: {fix['suggestion']}")
+        lines.append("")
+
     lines.append("## Optimization recommendations")
     rec = ar.recommendations or {}
     lines.append(f"- Recommended RAM: {rec.get('recommended_ram_gb', 'n/a')} GB (detected total: {rec.get('detected_total_ram_gb', 'n/a')} GB)")
+    
+    # Hardware-aware recommendations
+    if rec.get('hardware_based_tuning'):
+        lines.append("- Hardware-aware tuning enabled")
+        lines.append(f"  - GPU vendor: {rec.get('gpu_vendor', 'unknown')}")
+        lines.append(f"  - CPU cores: {rec.get('cpu_cores', 'unknown')}")
+    
+    if rec.get('hardware_notes'):
+        lines.append("- Hardware-specific recommendations:")
+        for note in rec['hardware_notes']:
+            lines.append(f"  - {note}")
+    
     lines.append("- Recommended JVM args:")
     if rec.get("recommended_jvm_args"):
         lines.append(f"  - {rec['recommended_jvm_args']}")
@@ -910,6 +1451,7 @@ def main():
     parser.add_argument("--loader", type=str, choices=["fabric", "forge", "quilt", "neoforge"], default=None, help="Целевой загрузчик (если знаете)")
     parser.add_argument("--ram-gb", type=float, default=None, help="Сколько RAM (ГБ) выделить клиенту")
     parser.add_argument("--threads", type=int, default=None, help="Количество потоков CPU (инфо для отчета)")
+    parser.add_argument("--crash-log", type=str, default=None, help="Путь к crash-report для анализа")
     parser.add_argument("--out", type=str, default=None, help="Папка для отчетов (по умолчанию: mods_dir/modpack_doctor_output)")
     # KB auto-update
     parser.add_argument("--db-update", choices=["now"], default=None, help="Принудительно обновить базы знаний сейчас")
@@ -959,20 +1501,40 @@ def main():
 
     # Analysis
     loader_inferred, mc_versions_inferred = infer_loader_and_mc_versions(mods)
-    missing_deps, version_mismatches, duplicates, mixed = analyze_mods(mods, known_conflicts_db)
+    missing_deps, version_mismatches, old_duplicates, mixed = analyze_mods(mods, known_conflicts_db)
     known_conflicts, potential_conflicts = detect_known_and_potential_conflicts(mods, known_conflicts_db)
+    
+    # New enhanced analysis
+    crash_analysis = None
+    if args.crash_log:
+        crash_log_path = Path(args.crash_log)
+        crash_analysis = analyze_crash_log(crash_log_path)
+    
+    # Hardware analysis
+    hardware_profile = analyze_hardware()
+    
+    # Mixed loader detailed analysis
+    mixed_loader_findings = detect_mixed_loaders_detailed(mods)
+    
+    # Library pillar checks
+    final_loader = args.loader or loader_inferred
+    library_pillar_issues = check_library_pillars(mods, final_loader, mc_versions_inferred)
+    
+    # Improved duplicate detection
+    duplicates = detect_duplicates_by_modid(mods)
+    
+    # Generate fix plan
+    fix_plan = generate_fix_plan(mods, duplicates, mixed_loader_findings, mods_dir)
 
-    # Recommendations
-    total_ram_gb = None
-    if psutil:
-        with contextlib.suppress(Exception):
-            total_ram_gb = round(psutil.virtual_memory().total / (1024**3), 1)
-
+    # Recommendations with hardware awareness
+    total_ram_gb = hardware_profile.get("ram_total_gb", None)
+    
     recs = recommend_optimizations(
         mods=mods,
         perf_db=perf_db,
         total_ram_gb=total_ram_gb,
-        user_ram_gb=args.ram_gb
+        user_ram_gb=args.ram_gb,
+        hardware_profile=hardware_profile
     )
 
     # Prepare result
@@ -988,7 +1550,12 @@ def main():
         potential_conflicts=potential_conflicts,
         mixed_loaders_warning=mixed,
         recommendations=recs,
-        kb_info=kb_info
+        kb_info=kb_info,
+        crash_analysis=crash_analysis,
+        hardware_profile=hardware_profile,
+        mixed_loader_findings=mixed_loader_findings,
+        library_pillar_issues=library_pillar_issues,
+        fix_plan=fix_plan
     )
 
     installed_ids = set((m.modid or m.name or m.file_name).lower() for m in mods)
@@ -1020,7 +1587,12 @@ def main():
             "potential_conflicts": ar.potential_conflicts,
             "mixed_loaders_warning": ar.mixed_loaders_warning,
             "recommendations": ar.recommendations,
-            "kb_info": ar.kb_info
+            "kb_info": ar.kb_info,
+            "crash_analysis": ar.crash_analysis,
+            "hardware_profile": ar.hardware_profile,
+            "mixed_loader_findings": ar.mixed_loader_findings,
+            "library_pillar_issues": ar.library_pillar_issues,
+            "fix_plan": ar.fix_plan
         }, f, ensure_ascii=False, indent=2)
 
     # Write Markdown
