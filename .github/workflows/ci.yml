@@ -15,4 +15,4 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
       - name: Smoke check
-        run: python -c "import json,sys;print('OK')"
+        run: python -c "import modpack_doctor; print('OK - modpack_doctor imports successfully')"
